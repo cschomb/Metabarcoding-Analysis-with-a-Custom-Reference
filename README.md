@@ -6,7 +6,7 @@
 ## Requirements
 This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database.
 It needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
-`[Accession number];tax=p:[PHYLUM],c:[CLASS], o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]`
+```[Accession number];tax=p:[PHYLUM],c:[CLASS], o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
 The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files.
 
 
