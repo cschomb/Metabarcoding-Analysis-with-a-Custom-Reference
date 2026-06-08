@@ -8,7 +8,7 @@ Performs a BLAST search of ESV sequences against a custom reference database (se
 ### Analysis
 Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then calculated into a BLAST score:
 
-$$BLAST score = (percent_identity + query_coverage)/2$$
+$$BLAST score = (percent\_identity + query\_coverage)/2$$
 
 The script will apply information thresholds according to the percent identity bracket of the BLAST hit:
 
