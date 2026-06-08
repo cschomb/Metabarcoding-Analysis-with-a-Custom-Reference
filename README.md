@@ -19,7 +19,7 @@ EXAMPLE_PROJECT
 |----02_analysis
 |    |---results
 |        |--best_blast_hits.xlsx
-|        |--filtered_blast_results.xlsx
+|        |--filtered_blast_results.csv
 |        |--results.xlsx
 |
 |----03_gbif
@@ -72,6 +72,22 @@ EXAMPLE_PROJECT
 
 ## Resulting files
 ### BLAST results
-The BLAST produces a custom output format with the following information in the columns:
+The BLAST produces a custom output tab-separated text with the following information in the columns:
 |query id (from the ESV fasta file)|sequence id (Fasta header from the reference file)|percent identity|alignment length|number of mismatches|number of gaps|query start|query end|sequence start|sequence end|E-value|bitscore|query coverage|
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+### Analysis
+#### filtered BLAST results
+Retains the top 3% percent identity of each BLAST query, splits the information from the FASTA header of the reference sequences and adds information about the percent identity intervall of the remaining candidates.
+
+#### best BLAST hits
+Contains information of the best BLAST hit after the analysis. Includes information about the score of the reference sequence, the quality of the reference sequence, as well as a comment if multiple candidates have the same BLAST score and one of them is chosen because of its quality. Also adds a list of the other candidates with their corresponding percent identity.
+
+#### results
+Puts together the information from the ESV table (Apscale output) and the best BLAST hits. 
+|hash|sequence|s_acc|s_acc ... s_species|gbif_taxid|ncbi_taxid|pident|evlaue|total_score|comment|quality|other_candidates|sum_of reads|samples|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|unique identifier from the ESV fasta file|Nucleotide sequence of the ESV|Accession number of the reference sequence|Taxonomic information of the reference sequence|GBIF taxid of the reference sequence|NCBI taxid of the reference sequence|Percent identity of the reference sequence to the ESV sequence|E-Value from the BLAST analysis|combined score of the reference sequence from blast score and scoring file|More than one reference sequence with the same BLAST score|quality of the reference sequence (from the scoring file)|List of other candidates from the BLAST, that were within 3% percent identity of the best hit|Read count of the ESV over all samples|Read counts for the individual samples|
+
+
+
