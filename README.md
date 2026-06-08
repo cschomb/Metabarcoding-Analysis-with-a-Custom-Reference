@@ -1,11 +1,20 @@
 # Metabarcoding-Analysis
 
 ## Introduction
+This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database. It assignes taxonomic information to the ESV sequences and can check the plausibility of these assignments by querying GBIF occurrence records.
+### BLAST search
+Performs a BLAST search of ESV sequences against a custom reference database (see Requirements for details). The maximum number of BLAST hits to keep can be set in the settings file. It also incorporates information about the length of the query coverage, which is used in the analysis step.
 
+### Analysis
+Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then 
+
+$$(percent identity + query coverage)/2$$
+
+
+### GBIF occurrence search
 
 ## Requirements
-This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database.
-It needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
+This script needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
 
 ```[Accession number];tax=p:[PHYLUM],c:[CLASS],o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
 
@@ -16,8 +25,11 @@ Example:
 
 The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files.
 
+OPTINAL SCORING FILE
 
 
+
+### Dependencies
 This script was written for a UNIX Command Line Interface and requires `Python v3.12` and `ncbi-blast+ v2.12`
 
 Further Python dependencies are:
