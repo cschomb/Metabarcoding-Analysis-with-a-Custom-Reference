@@ -8,7 +8,7 @@ Performs a BLAST search of ESV sequences against a custom reference database (se
 ### Analysis
 Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then 
 
-$$BLAST_score = (percent_identity + query_coverage)/2$$
+$$BLAST\_score = (percent_identity + query_coverage)/2$$
 
 
 ### GBIF occurrence search
