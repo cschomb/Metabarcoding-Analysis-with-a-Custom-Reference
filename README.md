@@ -6,9 +6,18 @@ This script is used for the Analysis of Metabarcoding results from the Apscale P
 Performs a BLAST search of ESV sequences against a custom reference database (see Requirements for details). The maximum number of BLAST hits to keep can be set in the settings file. It also incorporates information about the length of the query coverage, which is used in the analysis step.
 
 ### Analysis
-Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then 
+Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then calculated into a BLAST score:
 
-$$BLAST\_score = (percent_identity + query_coverage)/2$$
+$$BLAST score = (percent_identity + query_coverage)/2$$
+
+The script will apply information thresholds according to the percent identity bracket of the BLAST hit:
+
+`100-97 - all taxonomic information is kept`
+`97-94 - taxonomic information about species is deleted`
+`94-90 - taxonomic information about genus and species is deleted`
+`<90 - no taxonomic information is kept`
+
+
 
 
 ### GBIF occurrence search
