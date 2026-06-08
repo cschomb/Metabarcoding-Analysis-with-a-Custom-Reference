@@ -89,5 +89,16 @@ Puts together the information from the ESV table (Apscale output) and the best B
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 |unique identifier from the ESV fasta file|Nucleotide sequence of the ESV|Accession number of the reference sequence|Taxonomic information of the reference sequence|GBIF taxid of the reference sequence|NCBI taxid of the reference sequence|Percent identity of the reference sequence to the ESV sequence|E-Value from the BLAST analysis|combined score of the reference sequence from blast score and scoring file|More than one reference sequence with the same BLAST score|quality of the reference sequence (from the scoring file)|List of other candidates from the BLAST, that were within 3% percent identity of the best hit|Read count of the ESV over all samples|Read counts for the individual samples|
 
+### GBIF
+#### taxonomy table
+Table of taxonomies that are queried at GBIF. The taxonomies of the best BLAST hits are split up into _Species_, _Genus_, and _Family_; all of these levels are queried individually, while the list of other candidates are queried as _Species_.
 
+#### gbif occurence counts
+Results from the GBIF query with information about the original query that was send, the _gbif_match_type_ for the query, confidence for the match, number of occurences in the area queried, and a True / False column whether the query is accepted to occur in the area based on the threshold set in the setting file.
+
+#### results with gbif presence
+Combines the results file with the GBIF query results, by adding in new columns.
+|...|quality|GBIF_presence_family|GBIF_presence_genus|GBIF_presence_species|remaining_other_candidates|sum_of_reads|
+|---|---|---|---|---|---|---|
+|...|...|plausible / implausible depending on presence in GBID query|plausible / implausible depending on presence in GBID query|plausible / implausible depending on presence in GBID query|Remaining other candidates, that occur in the queried area according to GBIF|...|
 
