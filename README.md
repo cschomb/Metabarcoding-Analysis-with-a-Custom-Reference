@@ -71,3 +71,6 @@ EXAMPLE_PROJECT
 
 
 ## Resulting files
+### BLAST results
+The BLAST produces a custom output format with the following information in the columns:
+|query id (from the ESV fasta file)|sequence id (Fasta header from the reference file)|percent identity|alignment length|number of mismatches|number of gaps|query start|query end|sequence start|sequence end|E-value|bitscore|query coverage|
