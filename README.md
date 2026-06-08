@@ -1,5 +1,5 @@
 # Metabarcoding-Analysis
-
+'''
 EXAMPLE_PROJECT
 |----01_blast
 |    |---results
@@ -18,3 +18,4 @@ EXAMPLE_PROJECT
 |----input
 |----log.txt
 |----settings.xlsx
+'''
