@@ -37,9 +37,18 @@ EXAMPLE_PROJECT
 #### blast-tab
 |parameter|value|description|
 |---|---|---|
-|reference fasta||FASTA file used to build the BLAST databease (see above for requirements)|
-|esv_fasta||Fasta file with the ESVs to be analysed (from the apscale output)|
-|max_target_seqs||maximum number of target sequqences to be kept for further analysis from the blast|
+|reference fasta|**filename**|FASTA file used to build the BLAST databease (see above for requirements). File in input folder or give path to file.|
+|esv_fasta|**filename**|Fasta file with the ESVs to be analysed (from the apscale output). File in input folder or give path to file|
+|max_target_seqs|**int**|maximum number of target sequqences to be kept for further analysis from the blast|
+
+### analysis-tab
+|parameter|value|description|
+|---|---|---|
+|esv_table||Excel ESV table from the Apscale output. File in input folder or give path to file.|
+||||
+||||
+||||
+||||
 
 ### Run the analysis
 
