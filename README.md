@@ -40,6 +40,7 @@ EXAMPLE_PROJECT
 |reference fasta||FASTA file used to build the BLAST databease (see above for requirements)|
 |esv_fasta||Fasta file with the ESVs to be analysed (from the apscale output)|
 |max_target_seqs||maximum number of target sequqences to be kept for further analysis from the blast|
+
 ###Run the analysis
 
 
