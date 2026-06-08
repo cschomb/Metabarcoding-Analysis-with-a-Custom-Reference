@@ -13,10 +13,10 @@ $$BLAST score = (percent identity + query coverage)/2$$
 The script will apply information thresholds according to the percent identity bracket of the BLAST hit:
 
 ```
-100-97 - all taxonomic information is kept
-97-94 - taxonomic information about species is deleted
-94-90 - taxonomic information about genus and species is deleted
-<90 - no taxonomic information is kept
+100-97  - all taxonomic information is kept
+ 97-94  - taxonomic information about species is deleted
+ 94-90  - taxonomic information about genus and species is deleted
+<90     - no taxonomic information is kept
 ```
 
 
