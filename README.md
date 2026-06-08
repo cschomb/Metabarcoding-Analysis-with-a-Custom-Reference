@@ -2,6 +2,9 @@
 
 ## Introduction
 This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database. It assignes taxonomic information to the ESV sequences and can check the plausibility of these assignments by querying GBIF occurrence records.
+
+<img width="966" height="504" alt="analysis_overview" src="https://github.com/user-attachments/assets/40d953df-40e7-47f0-b07c-8284c0cfa35f" />
+
 ### BLAST search
 Performs a BLAST search of ESV sequences against a custom reference database (see Requirements for details). The maximum number of BLAST hits to keep can be set in the settings file. It also incorporates information about the length of the query coverage, which is used in the analysis step.
 
