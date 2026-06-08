@@ -4,6 +4,26 @@
 
 
 ## Requirements
+This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database.
+It needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
+`[Accession number];tax=p:[PHYLUM],c:[CLASS], o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]`
+The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files.
+
+
+
+This script was written for a UNIX Command Line Interface and requires `Python v3.12` and `ncbi-blast+ v2.12`
+
+Further Python dependencies are:
+`
+numpy
+pandas
+requests
+openpyxl
+pyproj
+tqdm
+urllib3
+`
+
 
 
 ## How to use
@@ -13,7 +33,7 @@ Initialise the folder structure with the `init` command
 python3 analysis.py init [NAME]
 ```
 This will results in the following folder structure:
-```
+`
 EXAMPLE_PROJECT
 |----01_blast
 |    |---results
@@ -36,7 +56,7 @@ EXAMPLE_PROJECT
 |
 |----log.txt
 |----settings.xlsx
-```
+`
 ### Settings file
 Fill out the three tabs of the settings file with the required information.
 #### blast-tab
