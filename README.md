@@ -33,7 +33,7 @@ Initialise the folder structure with the `init` command
 python3 analysis.py init [NAME]
 ```
 This will results in the following folder structure:
-`
+```
 EXAMPLE_PROJECT
 |----01_blast
 |    |---results
@@ -56,7 +56,7 @@ EXAMPLE_PROJECT
 |
 |----log.txt
 |----settings.xlsx
-`
+```
 ### Settings file
 Fill out the three tabs of the settings file with the required information.
 #### blast-tab
