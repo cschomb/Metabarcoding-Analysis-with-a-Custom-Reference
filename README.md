@@ -166,5 +166,5 @@ Results from the GBIF query with information about the original query that was s
 Combines the results file with the GBIF query results, by adding in new columns.
 |...|quality|GBIF_presence_family|GBIF_presence_genus|GBIF_presence_species|remaining_other_candidates|sum_of_reads|...|
 |---|---|---|---|---|---|---|---|
-|...|...|<code style="color : green">plausible</code> / <code style="color : red">implausible</code> depending on presence in GBIF query|plausible / implausible depending on presence in GBIF query|plausible / implausible depending on presence in GBIF query|Remaining other candidates, that occur in the queried area according to GBIF|...|...|
+|...|...|$${\color{green}plausible}$$ / $${color{red}implausible}$$ depending on presence in GBIF query|plausible / implausible depending on presence in GBIF query|plausible / implausible depending on presence in GBIF query|Remaining other candidates, that occur in the queried area according to GBIF|...|...|
 
