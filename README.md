@@ -7,8 +7,12 @@
 
 
 ## How to use
-
 ### Create a new project
+Initialise the folder structure with the `init` command
+```
+python3 analysis.py init [NAME]
+```
+This will results in the following folder structure:
 ```
 EXAMPLE_PROJECT
 |----01_blast
@@ -34,6 +38,7 @@ EXAMPLE_PROJECT
 |----settings.xlsx
 ```
 ### Settings file
+Fill out the three tabs of the settings file with the required information.
 #### blast-tab
 |parameter|value|description|
 |---|---|---|
@@ -41,7 +46,7 @@ EXAMPLE_PROJECT
 |esv_fasta|_filename_|Fasta file with the ESVs to be analysed (from the apscale output). File in input folder or give path to file|
 |max_target_seqs|_int_|maximum number of target sequqences to be kept for further analysis from the blast|
 
-### analysis-tab
+#### analysis-tab
 |parameter|value|description|
 |---|---|---|
 |esv_table|_filename_|Excel ESV table from the Apscale output. File in input folder or give path to file.|
@@ -50,7 +55,7 @@ EXAMPLE_PROJECT
 |length_threshold|_int_|Minimum alignment length to keep from the BLAST results|
 |blast_results|_filename_|Optional override path to a BLAST output file. If empty, uses the one from _01_blast/results_.|
 
-### gbif-tab
+#### gbif-tab
 |parameter|value|description|
 |---|---|---|
 |input_results_xlsx|_filename_|Optional override. If blank, uses the one from _02_analysis_results_.|
@@ -67,7 +72,15 @@ EXAMPLE_PROJECT
 |gbif_pwd|_str_|GBIF password|
 
 
-## Run the analysis
+### Run the analysis
+The script can be started with the following command
+```
+python3 analysis.py run --project [NAME] --steps [all]
+```
+When chosing `--steps all` the complete pipeline is run from BLAST to GBIF query.
+It is also possible to run a subset of the steps. For instance if the BLAST is already done and the analysis and/or GBIF step should be repeated with different settings, the steps flag would be `--steps analysis,gbif`.
+The new analysis is appended to the `log.txt` file and every run of the pipeline is distinguishable with the timestamp appended to the resulting files.
+
 
 
 ## Resulting files
