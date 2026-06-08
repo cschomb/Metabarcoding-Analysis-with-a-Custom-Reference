@@ -5,11 +5,13 @@ EXAMPLE_PROJECT
 |    |---results
 |        |--blast.out
 |    |---tmp
+|
 |----02_analysis
 |    |---results
 |        |--best_blast_hits.xlsx
 |        |--filtered_blast_results.xlsx
 |        |--results.xlsx
+|
 |----03_gbif
 |    |---results
 |        |--gbif_occurrence_counts.xlsx
