@@ -54,13 +54,13 @@ EXAMPLE_PROJECT
 |parameter|value|description|
 |---|---|---|
 |input_results_xlsx|_filename_|Optional override. If blank, uses the one from _02_analysis_results_.|
-|year_from|_int|Count occurrences from this year onwards (inclusive).|
+|year_from|_int_|Count occurrences from this year onwards (inclusive).|
 |lon|_float_|Longitude of circle center (WGS84)|
 |lat|_float_|Latitude of circle center (WGS84)|
 |radius_m|_int_|Radius for the occurrence search circle in meters|
 |min_occurences|_int_|Minimum number of occurrences required for _occurs_in_area = Ture_|
 |n_points|_int_|Number of polygon points to approximate the circle|
-|workers_unauth|_int|Worker threads when running the GBIF search WITHOUT credentials|
+|workers_unauth|_int_|Worker threads when running the GBIF search WITHOUT credentials|
 |workers_auth|_int_|Worker threads when running the GBIF search WITH credentials.|
 |rps|_int_|number of requests per second for the GBIF API|
 |gbif_user|_str_|GBIF username|
