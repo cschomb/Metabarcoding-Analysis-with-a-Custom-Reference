@@ -1,14 +1,14 @@
 # Metabarcoding-Analysis
 
-##Introduction
+## Introduction
 
 
-##Requirements
+## Requirements
 
 
-##How to use
+## How to use
 
-###Create a new project
+### Create a new project
 ```
 EXAMPLE_PROJECT
 |----01_blast
@@ -33,15 +33,15 @@ EXAMPLE_PROJECT
 |----log.txt
 |----settings.xlsx
 ```
-###Settings file
-####blast-tab
+### Settings file
+#### blast-tab
 |parameter|value|description|
 |---|---|---|
 |reference fasta||FASTA file used to build the BLAST databease (see above for requirements)|
 |esv_fasta||Fasta file with the ESVs to be analysed (from the apscale output)|
 |max_target_seqs||maximum number of target sequqences to be kept for further analysis from the blast|
 
-###Run the analysis
+### Run the analysis
 
 
-##Resulting files
+## Resulting files
