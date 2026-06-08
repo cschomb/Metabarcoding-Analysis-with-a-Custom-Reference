@@ -1,4 +1,4 @@
-# Metabarcoding-Analysis
+# MEtabarcoding-ANalysis against a CUstom REference (MEAN-CURE)
 
 ## Introduction
 This script is used for the Analysis of Metabarcoding results from the Apscale Pipeline from a custom reference database. It assignes taxonomic information to the ESV sequences and can check the plausibility of these assignments by querying GBIF occurrence records.
