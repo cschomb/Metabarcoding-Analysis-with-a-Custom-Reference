@@ -30,6 +30,7 @@ The script will apply information thresholds according to the percent identity b
 ## Requirements
 This script needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
 
+[!IMPORTANT]
 ```[Accession number];tax=p:[PHYLUM],c:[CLASS],o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
 
 Example:
