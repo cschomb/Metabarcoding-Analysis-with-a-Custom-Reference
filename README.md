@@ -30,12 +30,12 @@ The script will apply information thresholds according to the percent identity b
 ## Requirements
 This script needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
 
-[!IMPORTANT]
-```[Accession number];tax=p:[PHYLUM],c:[CLASS],o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
-
-Example:
-
-```OR234967.1;tax=p:Tracheophyta,c:Magnoliopsida,o:Boraginales,f:Boraginaceae,g:Borago,s:Borago_officinalis,gbiftax:2926110,ncbitax:13363```
+>[!IMPORTANT]
+>```[Accession number];tax=p:[PHYLUM],c:[CLASS],o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
+>
+>Example:
+>
+>```OR234967.1;tax=p:Tracheophyta,c:Magnoliopsida,o:Boraginales,f:Boraginaceae,g:Borago,s:Borago_officinalis,gbiftax:2926110,ncbitax:13363```
 
 
 The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files. Prepepared reference fasta file can be found [here](https://github.com/cschomb/Primer-specific-Reference-Databases-for-Metabarcoding).
