@@ -40,7 +40,8 @@ This script needs the output from a Apscale run (v4 or higher), and a reference 
 
 The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files. Prepepared reference fasta file can be found [here](https://github.com/cschomb/Primer-specific-Reference-Databases-for-Metabarcoding).
 
-OPTINAL SCORING FILE
+### Optional scoring file
+The Primer specific reference databases also come with a scoring file, which reflect the quality of the reference sequences and the possibility to use them as a country-specific local database. Sequences score points according how well they can be distinguished from similar sequences and are optionally awarded points for local occurrence.
 
 
 
