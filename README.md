@@ -75,7 +75,7 @@ pip install --upgrade meancure
 ### Create a new project
 Initialise the folder structure with the `init` command
 ```
-python3 analysis.py init [NAME]
+meancure init [NAME]
 ```
 This will results in the following folder structure:
 ```
@@ -140,7 +140,7 @@ Fill out the three tabs of the settings file with the required information.
 ### Run the analysis
 The script can be started with the following command
 ```
-python3 analysis.py run --project [NAME] --steps [all]
+meancure run --project [NAME] --steps [all]
 ```
 When chosing `--steps all` the complete pipeline is run from BLAST to GBIF query.
 It is also possible to run a subset of the steps. For instance if the BLAST is already done and the analysis and/or GBIF step should be repeated with different settings, the steps flag would be `--steps analysis,gbif`.
