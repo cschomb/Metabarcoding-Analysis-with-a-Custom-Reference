@@ -62,6 +62,16 @@ urllib3
 
 
 ## How to use
+### Installation
+```
+pip install meancure
+```
+
+Upgrade:
+```
+pip install --upgrade meancure
+```
+
 ### Create a new project
 Initialise the folder structure with the `init` command
 ```
