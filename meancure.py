@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 
 import numpy as np
 import pandas as pd
@@ -219,8 +220,8 @@ def write_settings_template(paths: ProjectPaths, force: bool = False) -> None:
              "description": "Radius in meters for the GBIF search circle."},
             {"parameter": "min_occurrences", "value": 5,
              "description": "Min occurrences required for occurs_in_area=True."},
-            {"parameter": "n_points",     "value": 60,
-             "description": "Polygon points to approximate the search circle (default 60)."},
+            {"parameter": "n_points",     "value": 12,
+             "description": "Polygon points to approximate the search circle (default 12)."},
 
             # --- Concurrency ---
             {"parameter": "workers_unauth", "value": 4,
@@ -890,12 +891,16 @@ def _make_gbif_session(
 ) -> requests.Session:
     """
     Build a requests.Session for GBIF API calls.
-    If credentials are provided the session uses HTTP Basic Auth,
-    which enables higher rate limits on the GBIF API.
+    If credentials are provided the session uses HTTP Basic Auth.
+
+    Important:
+        Do not force "Connection: close" here. Keeping connections reusable
+        reduces request overhead and speeds up large occurrence checks without
+        increasing request rate.
     """
     session = requests.Session()
     session.headers.update(HEADERS)
-    session.headers["Connection"] = "close"
+
     if gbif_user and gbif_pwd:
         session.auth = (gbif_user, gbif_pwd)
 
@@ -907,13 +912,16 @@ def _make_gbif_session(
         raise_on_status=False,
         respect_retry_after_header=True,
     )
+
     adapter = HTTPAdapter(
         max_retries=retry,
-        pool_connections=1,
-        pool_maxsize=1,
+        pool_connections=4,
+        pool_maxsize=4,
     )
+
     session.mount("https://", adapter)
-    session.mount("http://",  adapter)
+    session.mount("http://", adapter)
+
     return session
 
 
@@ -1265,27 +1273,6 @@ def build_wkt_circle(lon: float, lat: float, radius_m: float, n_points: int = 60
     coords = ", ".join(f"{x} {y}" for x, y in pts)
     return f"POLYGON(({coords}))"
 
-
-def _write_checkpoint(
-    out_df: pd.DataFrame,
-    key_to_result: dict[int, dict[str, Any]],
-    checkpoint_path: Path,
-) -> None:
-    tmp = out_df.copy()
-    for i, row in tmp.iterrows():
-        k = row.get("gbif_taxon_key")
-        if pd.isna(k):
-            tmp.at[i, "occ_error"] = "No gbif_taxon_key"
-            continue
-        kk = int(k)
-        if kk in key_to_result:
-            res = key_to_result[kk]
-            tmp.at[i, "occurs_in_area"]   = res.get("occurs_in_area")
-            tmp.at[i, "occurrence_count"] = res.get("occurrence_count")
-            tmp.at[i, "occ_error"]        = res.get("occ_error")
-    tmp.to_excel(checkpoint_path, index=False)
-
-
 def _apply_occurrence_results_vectorised(
     out: pd.DataFrame,
     key_to_result: dict[int, dict[str, Any]],
@@ -1316,6 +1303,72 @@ def _apply_occurrence_results_vectorised(
 # ---------------------------------------------------------------------------
 # GBIF occurrence counting via API
 # ---------------------------------------------------------------------------
+class RateLimiter:
+    """
+    Thread-safe global rate limiter.
+
+    This controls how quickly requests are started across all worker threads.
+    You can therefore use several workers to hide network latency while still
+    staying under a target requests-per-second value.
+    """
+    def __init__(self, rate_per_second: float):
+        if rate_per_second <= 0:
+            raise ValueError("rate_per_second must be > 0")
+        self.min_interval = 1.0 / float(rate_per_second)
+        self.lock = threading.Lock()
+        self.next_allowed = time.monotonic()
+
+    def wait(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            if now < self.next_allowed:
+                time.sleep(self.next_allowed - now)
+                now = time.monotonic()
+            self.next_allowed = now + self.min_interval
+
+
+def stable_hash_text(s: str) -> str:
+    """
+    Stable hash for long strings such as WKT geometries.
+
+    Python's built-in hash() is intentionally not stable across processes,
+    so use SHA256 for persistent cache keys.
+    """
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def load_occurrence_cache(cache_path: Path) -> dict[str, dict[str, Any]]:
+    """
+    Load persistent occurrence cache.
+
+    Cache keys include:
+        taxon key, year_from, geometry hash, and min_occurrences.
+    """
+    if not cache_path.exists():
+        return {}
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_occurrence_cache(
+    cache_path: Path,
+    cache: dict[str, dict[str, Any]],
+) -> None:
+    """
+    Atomically save persistent occurrence cache.
+    """
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_name(cache_path.name + ".tmp")
+
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, ensure_ascii=False, indent=2)
+
+    tmp_path.replace(cache_path)
 
 def count_occurrences_api(
     paths: ProjectPaths,
@@ -1324,83 +1377,169 @@ def count_occurrences_api(
     year_from: int,
     min_occurrences: int,
     safe_workers: int,
-    checkpoint_path: Optional[Path],
     gbif_user: Optional[str] = None,
     gbif_pwd: Optional[str] = None,
+    rate_limiter: Optional[RateLimiter] = None,
+    cache_path: Optional[Path] = None,
 ) -> pd.DataFrame:
     """
-    Count GBIF occurrences using the occurrence/search endpoint with a
-    thread pool. safe_workers is already computed by the caller.
-    Each thread reuses its own session (with credentials if provided).
+    Count GBIF occurrences using the occurrence/search endpoint.
+
+    Features:
+        - Uses limit=0 for efficient count-only queries.
+        - Uses a global rate limiter.
+        - Uses persistent JSON caching.
+        - Uses the cache as the checkpoint/restart mechanism.
+        - Retries transient errors until they are resolved.
+
+    Only transient errors are retried indefinitely:
+        - HTTP 429
+        - HTTP 500
+        - HTTP 502
+        - HTTP 503
+        - HTTP 504
+        - connection errors
+        - timeouts
+        - "Failed after 5 attempts"
+
+    Permanent errors, such as HTTP 400, 401, 403, invalid geometry, etc.,
+    are not retried forever.
     """
     out = matches_df.copy()
-    out["occurs_in_area"]   = None
+    out["occurs_in_area"] = None
     out["occurrence_count"] = None
-    out["occ_error"]        = None
+    out["occ_error"] = None
 
     unique_keys = sorted(int(k) for k in out["gbif_taxon_key"].dropna().unique())
     if not unique_keys:
         log(paths, "No taxon keys to query.")
         return out
 
+    # -----------------------------------------------------------------------
+    # Persistent occurrence cache
+    # -----------------------------------------------------------------------
+    geometry_hash = stable_hash_text(wkt_geometry)
+
+    def make_cache_key(taxon_key: int) -> str:
+        return (
+            f"taxonKey={int(taxon_key)}|"
+            f"year_from={int(year_from)}|"
+            f"geometry={geometry_hash}|"
+            f"min_occurrences={int(min_occurrences)}"
+        )
+
+    occurrence_cache: dict[str, dict[str, Any]] = {}
+    if cache_path is not None:
+        occurrence_cache = load_occurrence_cache(cache_path)
+
+    key_to_result: dict[int, dict[str, Any]] = {}
+
+    cached = 0
+    for k in unique_keys:
+        ck = make_cache_key(k)
+        if ck in occurrence_cache:
+            key_to_result[k] = occurrence_cache[ck]
+            cached += 1
+
+    keys_to_query = [k for k in unique_keys if k not in key_to_result]
+
     log(
         paths,
-        f"Counting occurrences via API: {len(unique_keys)} keys, "
+        f"Counting occurrences via API: {len(unique_keys)} keys total, "
+        f"{cached} from cache, {len(keys_to_query)} to query, "
         f"{safe_workers} workers"
     )
 
-    url              = f"{GBIF_API}occurrence/search"
-    key_to_result:   dict[int, dict[str, Any]] = {}
-    result_lock      = threading.Lock()
-    checkpoint_every = 200
+    if not keys_to_query:
+        log(paths, "All occurrence counts loaded from cache.")
+        return _apply_occurrence_results_vectorised(out, key_to_result)
+
+    url = f"{GBIF_API}occurrence/search"
+    result_lock = threading.Lock()
+    save_every = 200
+
+    def is_cacheable_result(res: dict[str, Any]) -> bool:
+        """
+        Cache successful occurrence-count responses only.
+
+        Transient failures are not cached because they should be retried.
+        Permanent failures are also not cached so that future runs can try again
+        after user-side fixes.
+        """
+        return (
+            res.get("occ_error") is None
+            and isinstance(res.get("occurrence_count"), int)
+        )
+
+    def save_cache_if_enabled() -> None:
+        if cache_path is not None:
+            save_occurrence_cache(cache_path, occurrence_cache)
 
     def fetch_one(taxon_key: int) -> tuple[int, dict[str, Any]]:
         params = {
-            "taxonKey":           str(taxon_key),
-            "geometry":           wkt_geometry,
-            "year":               f"{int(year_from)},*",
-            "occurrenceStatus":   "PRESENT",
+            "taxonKey": str(taxon_key),
+            "geometry": wkt_geometry,
+            "year": f"{int(year_from)},*",
+            "occurrenceStatus": "PRESENT",
             "hasGeospatialIssue": "false",
-            "hasCoordinate":      "true",
-            "limit":              "0",
-            "offset":             "0",
+            "hasCoordinate": "true",
+            "limit": "0",
+            "offset": "0",
         }
+
         last_exc = None
+
         for attempt in range(5):
             try:
+                if rate_limiter is not None:
+                    rate_limiter.wait()
+
                 r = _get_thread_session(gbif_user, gbif_pwd).get(
-                    url, params=params, timeout=30
+                    url,
+                    params=params,
+                    timeout=30,
                 )
 
                 if r.status_code == 200:
-                    data   = r.json()
-                    cnt    = data.get("count", None)
-                    occurs = (cnt >= int(min_occurrences)) if isinstance(cnt, int) else None
+                    data = r.json()
+                    cnt = data.get("count", None)
+                    occurs = (
+                        cnt >= int(min_occurrences)
+                        if isinstance(cnt, int)
+                        else None
+                    )
+
                     return taxon_key, {
                         "occurrence_count": cnt,
-                        "occurs_in_area":   occurs,
-                        "occ_error":        None,
+                        "occurs_in_area": occurs,
+                        "occ_error": None,
                     }
+
                 elif r.status_code in RETRYABLE_STATUS:
                     retry_after = r.headers.get("Retry-After")
                     sleep_s = (
-                        float(retry_after) if retry_after
+                        float(retry_after)
+                        if retry_after
                         else (2 ** attempt) + random.uniform(1, 3)
                     )
+
                     tqdm.write(
                         f"  key {taxon_key} attempt {attempt + 1} "
                         f"HTTP {r.status_code} — sleeping {sleep_s:.1f}s"
                     )
                     time.sleep(sleep_s)
+
                 else:
                     return taxon_key, {
                         "occurrence_count": None,
-                        "occurs_in_area":   None,
-                        "occ_error":        f"HTTP {r.status_code}: {r.text[:200]}",
+                        "occurs_in_area": None,
+                        "occ_error": f"HTTP {r.status_code}: {r.text[:200]}",
                     }
+
             except requests.exceptions.RequestException as e:
                 last_exc = e
-                sleep_s  = (2 ** attempt) + random.uniform(0, 2)
+                sleep_s = (2 ** attempt) + random.uniform(0, 2)
+
                 tqdm.write(
                     f"  key {taxon_key} attempt {attempt + 1} "
                     f"failed: {e} — retrying in {sleep_s:.1f}s"
@@ -1409,49 +1548,94 @@ def count_occurrences_api(
 
         return taxon_key, {
             "occurrence_count": None,
-            "occurs_in_area":   None,
-            "occ_error":        f"Failed after 5 attempts: {last_exc}",
+            "occurs_in_area": None,
+            "occ_error": f"Failed after 5 attempts: {last_exc}",
         }
 
-    completed = [0]
+    def run_query_batch(
+        batch_keys: list[int],
+        desc: str,
+        workers: int,
+    ) -> None:
+        completed = 0
 
-    with ThreadPoolExecutor(max_workers=safe_workers) as ex:
-        futures = {ex.submit(fetch_one, k): k for k in unique_keys}
-        for fut in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Occurrence counts",
-            unit="taxon",
-        ):
-            k, res = fut.result()
-            with result_lock:
-                key_to_result[k] = res
-                completed[0] += 1
-                if checkpoint_path and completed[0] % checkpoint_every == 0:
-                    _write_checkpoint(out, key_to_result, checkpoint_path)
-                    log(paths, f"Checkpoint written ({completed[0]}/{len(unique_keys)} done)")
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(fetch_one, k): k for k in batch_keys}
 
-    if checkpoint_path:
-        _write_checkpoint(out, key_to_result, checkpoint_path)
-
-    retry_keys = [
-        k for k, res in key_to_result.items()
-        if _is_transient_error(str(res.get("occ_error") or ""))
-    ]
-    if retry_keys:
-        log(paths, f"Retrying {len(retry_keys)} transient failures after cooldown")
-        time.sleep(15)
-        with ThreadPoolExecutor(max_workers=max(safe_workers // 2, 2)) as ex:
-            futures = {ex.submit(fetch_one, k): k for k in retry_keys}
             for fut in tqdm(
                 as_completed(futures),
                 total=len(futures),
-                desc="Retry occurrences",
+                desc=desc,
                 unit="taxon",
             ):
                 k, res = fut.result()
+
                 with result_lock:
                     key_to_result[k] = res
+                    completed += 1
+
+                    if cache_path is not None and is_cacheable_result(res):
+                        occurrence_cache[make_cache_key(k)] = res
+
+                    if completed % save_every == 0:
+                        save_cache_if_enabled()
+                        log(
+                            paths,
+                            f"Occurrence cache saved "
+                            f"({completed}/{len(batch_keys)} in current batch)"
+                        )
+
+        save_cache_if_enabled()
+
+    # -----------------------------------------------------------------------
+    # Initial occurrence query batch
+    # -----------------------------------------------------------------------
+    run_query_batch(
+        keys_to_query,
+        desc="Occurrence counts",
+        workers=safe_workers,
+    )
+
+    # -----------------------------------------------------------------------
+    # Retry transient failures until resolved
+    # -----------------------------------------------------------------------
+    retry_round = 0
+
+    while True:
+        retry_keys = [
+            k for k in keys_to_query
+            if _is_transient_error(
+                str(key_to_result.get(k, {}).get("occ_error") or "")
+            )
+        ]
+
+        if not retry_keys:
+            log(paths, "No transient occurrence errors remain.")
+            break
+
+        retry_round += 1
+
+        # Gradually increase cooldown, capped at 5 minutes.
+        cooldown_s = min(300, 15 * retry_round)
+
+        log(
+            paths,
+            f"Occurrence retry round {retry_round}: "
+            f"{len(retry_keys)} transient failures remain. "
+            f"Cooling down for {cooldown_s}s before retrying."
+        )
+
+        time.sleep(cooldown_s)
+
+        retry_workers = max(safe_workers // 2, 2)
+
+        run_query_batch(
+            retry_keys,
+            desc=f"Retry occurrences round {retry_round}",
+            workers=retry_workers,
+        )
+
+    save_cache_if_enabled()
 
     return _apply_occurrence_results_vectorised(out, key_to_result)
 
@@ -1664,7 +1848,6 @@ def step3_gbif(
         ))
 
     base            = paths.gbif_results / f"gbif_{RUN_TS}"
-    checkpoint_path = paths.gbif_results / f"gbif_checkpoint_{RUN_TS}.xlsx"
 
     # Step 3a: extract taxonomy table
     taxonomy_df   = extract_taxonomy_table_gbif(paths, input_xlsx)
@@ -1684,28 +1867,32 @@ def step3_gbif(
     wkt = build_wkt_circle(lon, lat, radius_m, n_points=n_points)
 
     # Step 3d: count occurrences via API
-    log(paths, f"Occurrence mode: API ({safe_workers} workers, target {rps} rps)")
+    rate_limiter = RateLimiter(rps)
+    occ_cache_path = paths.gbif_results / "occurrence_cache.json"
+
+    log(
+        paths,
+        f"Occurrence mode: API "
+        f"({safe_workers} workers, target {rps} requests/second, "
+        f"cache={occ_cache_path})"
+    )
+
     occ_df = count_occurrences_api(
-        paths, matches_df,
+        paths,
+        matches_df,
         wkt_geometry=wkt,
         year_from=year_from,
         min_occurrences=min_occ,
         safe_workers=safe_workers,
-        checkpoint_path=checkpoint_path,
         gbif_user=gbif_user,
         gbif_pwd=gbif_pwd,
+        rate_limiter=rate_limiter,
+        cache_path=occ_cache_path,
     )
-
-    occ_path = Path(str(base) + "_gbif_occurrence_counts.xlsx")
-    occ_df.to_excel(occ_path, index=False)
-    log(paths, f"Wrote {occ_path}")
 
     compare_path = Path(str(base) + "_results_with_gbif_presence.xlsx")
     compare_to_input_and_write(paths, input_xlsx, occ_df, compare_path)
     log(paths, f"Wrote {compare_path}")
-
-    if checkpoint_path.exists():
-        checkpoint_path.unlink(missing_ok=True)
 
     log(paths, "GBIF occurrence finished.")
 
@@ -1815,7 +2002,6 @@ def main() -> None:
             "\n"
             "gbif output:\n"
             "\tgbif_<timestamp>_taxonomy_table.xlsx\n"
-            "\tgbif_<timestamp>_gbif_occurrence_counts.xlsx\n"
             "\tgbif_<timestamp>_results_with_gbif_presence.xlsx\n"
         ),
     )
