@@ -11,7 +11,7 @@ Performs a BLAST search of ESV sequences against a custom reference database (se
 ### Analysis
 Filters the BLAST hits, so that the top 3% of the most identical records remain as candidates. These results are then calculated into a BLAST score:
 
-$$BLAST score = (percent identity + query coverage)/2$$
+$$BLAST score = percent identity + (query coverage/5)$$
 
 The script will apply information thresholds according to the percent identity bracket of the BLAST hit:
 
@@ -62,7 +62,8 @@ urllib3
 
 
 ## How to use
-### Installation
+### Command line version
+#### Installation
 ```
 pip install meancure
 ```
@@ -72,7 +73,7 @@ Upgrade:
 pip install --upgrade meancure
 ```
 
-### Create a new project
+#### Create a new project
 Initialise the folder structure with the `init` command
 ```
 meancure init [NAME]
@@ -102,16 +103,16 @@ EXAMPLE_PROJECT
 |----log.txt
 |----settings.xlsx
 ```
-### Settings file
+#### Settings file
 Fill out the three tabs of the settings file with the required information.
-#### blast-tab
+##### blast-tab
 |parameter|value|description|
 |---|---|---|
 |reference fasta|_filename_|FASTA file used to build the BLAST databease (see above for requirements). File in input folder or give path to file.|
 |esv_fasta|_filename_|Fasta file with the ESVs to be analysed (from the apscale output). File in input folder or give path to file|
 |max_target_seqs|_int_|maximum number of target sequqences to be kept for further analysis from the blast|
 
-#### analysis-tab
+##### analysis-tab
 |parameter|value|description|
 |---|---|---|
 |esv_table|_filename_|Excel ESV table from the Apscale output. File in input folder or give path to file.|
@@ -120,7 +121,7 @@ Fill out the three tabs of the settings file with the required information.
 |length_threshold|_int_|Minimum alignment length to keep from the BLAST results|
 |blast_results|_filename_|Optional override path to a BLAST output file. If empty, uses the one from _01_blast/results_.|
 
-#### gbif-tab
+##### gbif-tab
 |parameter|value|description|
 |---|---|---|
 |input_results_xlsx|_filename_|Optional override. If blank, uses the one from _02_analysis_results_.|
@@ -137,7 +138,7 @@ Fill out the three tabs of the settings file with the required information.
 |gbif_pwd|_str_|GBIF password|
 
 
-### Run the analysis
+#### Run the analysis
 The script can be started with the following command
 ```
 meancure run --project [NAME] --steps [all]
