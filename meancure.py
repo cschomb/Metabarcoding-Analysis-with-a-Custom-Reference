@@ -35,6 +35,11 @@ from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 
+import platform
+import shutil
+import tempfile
+import uuid
+
 import numpy as np
 import pandas as pd
 import requests
@@ -44,6 +49,7 @@ from pyproj import Geod
 from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util.retry import Retry
+from typing import Any, Optional, Callable
 
 # ---------------------------------------------------------------------------
 # Global constants
@@ -52,6 +58,17 @@ from urllib3.util.retry import Retry
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 UNKNOWN_TAXON    = "NA"
 RUN_TS           = datetime.now().strftime("%Y%m%d_%H%M%S")
+class PipelineAborted(Exception):
+    """Raised internally when the user requests cancellation mid-run."""
+    pass
+
+
+AbortCheck = Optional[Callable[[], bool]]
+
+
+def _check_abort(abort_check: AbortCheck) -> None:
+    if abort_check is not None and abort_check():
+        raise PipelineAborted("Pipeline aborted by user.")
 
 # ---------------------------------------------------------------------------
 # Logging helpers
@@ -211,7 +228,11 @@ def write_settings_template(paths: ProjectPaths, force: bool = False) -> None:
             {"parameter": "input_results_xlsx", "value": "",
              "description": "Optional override. If blank, uses results from step 2."},
             {"parameter": "year_from",    "value": "",
-             "description": "Count occurrences from this year onwards (inclusive)."},
+             "description": (
+                 "Count occurrences from this year onwards (inclusive), e.g. 2000.\n"
+                 "Also accepts full GBIF range syntax: '2010,2020' (inclusive range), "
+                 "'*,2020' (up to 2020), or '2010,*' (from 2010, explicit)."
+            )},
             {"parameter": "lon",          "value": "",
              "description": "Longitude of circle center (WGS84)."},
             {"parameter": "lat",          "value": "",
@@ -317,7 +338,13 @@ def get_float(d: dict[str, Any], k: str, default: Optional[float] = None) -> flo
         if default is None:
             raise ValueError(f"Missing required setting '{k}'")
         return default
-    return float(d[k])
+    s = str(d[k]).strip()
+    # Tolerate a European-style decimal comma (e.g. "50,1109") typed
+    # directly into settings.xlsx, independent of whether it went through
+    # the Streamlit UI (which already normalizes this) or was hand-edited.
+    if s.count(",") == 1 and "." not in s:
+        s = s.replace(",", ".")
+    return float(s)
 
 
 def force_value_column_text_format(xlsx_path: Path, sheets: list[str]) -> None:
@@ -350,6 +377,7 @@ def run_cmd(paths: ProjectPaths, cmd: list[str]) -> None:
             stderr=subprocess.STDOUT,
             text=True,
             check=True,
+            **winproc.no_window_kwargs(),
         )
         if p.stdout:
             for line in p.stdout.splitlines():
@@ -398,9 +426,9 @@ def write_fasta_chunk(records: list[tuple[str, str]], out_path: Path) -> None:
 
 
 def split_fasta_into_chunks(
-    paths: ProjectPaths, query_fasta: Path, chunk_size: int = 100
+    paths: ProjectPaths, query_fasta: Path, out_dir: Path, chunk_size: int = 100
 ) -> list[Path]:
-    for p in paths.blast_tmp.glob("chunk_*.fasta"):
+    for p in out_dir.glob("chunk_*.fasta"):
         p.unlink(missing_ok=True)
 
     chunks: list[Path] = []
@@ -413,19 +441,118 @@ def split_fasta_into_chunks(
         nseq += 1
         if len(buf) >= chunk_size:
             idx += 1
-            out = paths.blast_tmp / f"chunk_{idx:06d}.fasta"
+            out = out_dir / f"chunk_{idx:06d}.fasta"
             write_fasta_chunk(buf, out)
             chunks.append(out)
             buf = []
 
     if buf:
         idx += 1
-        out = paths.blast_tmp / f"chunk_{idx:06d}.fasta"
+        out = out_dir / f"chunk_{idx:06d}.fasta"
         write_fasta_chunk(buf, out)
         chunks.append(out)
 
     log(paths, f"Split query into {len(chunks)} chunks (chunk_size={chunk_size}, sequences={nseq}).")
     return chunks
+
+# ---------------------------------------------------------------------------
+# Space-free scratch directory for BLAST+ (cross-platform)
+# ---------------------------------------------------------------------------
+# BLAST+'s own command-line parser treats -in/-db/-query/-out as
+# SPACE-SEPARATED lists of filenames (so multiple DBs/FASTA files can be
+# combined in one call). Any space anywhere in the path — most commonly a
+# Windows username like "C:\Users\Christoph Schomburg\..." — breaks this,
+# even though subprocess quotes the argument correctly at the OS level.
+# The splitting happens inside blastn/makeblastdb itself, not in Python.
+#
+# NOTE: tempfile.gettempdir() is deliberately NOT the first choice here —
+# on Windows it normally resolves to C:\Users\<username>\AppData\Local\Temp,
+# which has the exact same problem if the username contains a space.
+
+def _dir_is_writable(d: Path) -> bool:
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / f".write_test_{uuid.uuid4().hex[:8]}"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _space_free_candidate_bases() -> list[Path]:
+    """
+    Ordered list of base directories that are normally space-free and
+    exist on a standard install, independent of the current user's
+    profile/home directory path (which might itself contain a space).
+    """
+    candidates: list[Path] = []
+
+    if platform.system() == "Windows":
+        system_drive = os.environ.get("SystemDrive", "C:")
+        candidates.append(Path(system_drive + "\\") / "meancure_blast_tmp")
+
+        program_data = os.environ.get("ProgramData")
+        if program_data:
+            candidates.append(Path(program_data) / "MEANCURE" / "blast_tmp")
+
+        public = os.environ.get("PUBLIC")
+        if public:
+            candidates.append(Path(public) / "MEANCURE_blast_tmp")
+    else:
+        # /tmp and /var/tmp are essentially always space-free on Linux/macOS,
+        # regardless of whether the user's home directory has a space in it.
+        candidates.append(Path("/tmp") / "meancure_blast_tmp")
+        candidates.append(Path("/var/tmp") / "meancure_blast_tmp")
+
+    # Last-resort fallback, even though it CAN contain a space if the
+    # username has one (e.g. Windows) — kept last so better options are
+    # tried first.
+    candidates.append(Path(tempfile.gettempdir()) / "meancure_blast_tmp")
+
+    return candidates
+
+
+def get_blast_scratch_dir(run_id: str) -> Path:
+    """
+    Returns a writable directory, guaranteed to contain no spaces, for use
+    as a BLAST+ scratch area for this run. Raises RuntimeError with a
+    clear, actionable message if nothing usable could be found.
+    """
+    tried = []
+    for base in _space_free_candidate_bases():
+        if " " in str(base):
+            tried.append(f"{base}  (skipped: contains a space)")
+            continue
+        candidate = base / run_id
+        if _dir_is_writable(candidate):
+            return candidate
+        tried.append(f"{base}  (not writable)")
+
+    raise RuntimeError(
+        "BLAST+ could not find a writable folder without spaces in its "
+        "path to use as a scratch directory.\n\n"
+        "Tried:\n  " + "\n  ".join(tried) + "\n\n"
+        "Fix: create a folder like /tmp/meancure_blast_tmp (Linux/macOS) or "
+        "C:\\meancure_blast_tmp (Windows) manually and ensure you have "
+        "write access to it."
+    )
+
+
+def stage_file_for_blast(src: Path, dest_dir: Path, dest_name: str) -> Path:
+    """
+    Copies/hardlinks `src` into `dest_dir` under a filename we control
+    (so it's guaranteed space-free), for safe use as a BLAST+ -in argument.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / dest_name
+    if dest.exists():
+        dest.unlink()
+    try:
+        os.link(src, dest)       # hardlink: instant, no extra disk space
+    except OSError:
+        shutil.copy2(src, dest)  # cross-volume fallback
+    return dest
 
 
 # ---------------------------------------------------------------------------
@@ -438,14 +565,13 @@ BLAST_OUTFMT = (
 )
 
 
-def step1_blast(paths: ProjectPaths, blast_settings: dict[str, Any]) -> Path:
+def step1_blast(paths: ProjectPaths, blast_settings: dict[str, Any], abort_check: AbortCheck = None,) -> Path:
     log(paths, "STEP 1: RUNNING BLAST")
 
     ref_fasta       = resolve_path_setting(paths, blast_settings["reference_fasta"], paths.input)
     query_fasta     = resolve_path_setting(paths, blast_settings["esv_fasta"],       paths.input)
     max_target_seqs = get_int(blast_settings, "max_target_seqs")
     num_threads     = os.cpu_count() or 1
-    db_prefix       = paths.blast_tmp / "DB"
     out_file        = paths.blast_results / f"blast_{RUN_TS}.out"
 
     if not ref_fasta.exists():
@@ -453,53 +579,65 @@ def step1_blast(paths: ProjectPaths, blast_settings: dict[str, Any]) -> Path:
     if not query_fasta.exists():
         raise FileNotFoundError(f"esv_fasta not found: {query_fasta}")
 
-    run_cmd(paths, ["makeblastdb", "-in", str(ref_fasta), "-dbtype", "nucl", "-out", str(db_prefix)])
+    # BLAST+ chokes on spaces anywhere in -in/-db/-query paths (it parses
+    # them as space-separated lists). Stage everything it touches in a
+    # dedicated, guaranteed-space-free scratch directory.
+    scratch = get_blast_scratch_dir(f"blast_{RUN_TS}")
+    log(paths, f"Using space-safe BLAST scratch directory: {scratch}")
 
-    chunks = split_fasta_into_chunks(paths, query_fasta, chunk_size=100)
-    if out_file.exists():
-        out_file.unlink()
+    try:
+        ref_fasta_safe = stage_file_for_blast(ref_fasta, scratch, "reference.fasta")
+        db_prefix      = scratch / "DB"
 
-    log(paths, f"Running blastn chunked (threads={num_threads}, max_target_seqs={max_target_seqs})")
+        run_cmd(paths, ["makeblastdb", "-in", str(ref_fasta_safe), "-dbtype", "nucl", "-out", str(db_prefix)])
 
-    for chunk in tqdm(chunks, desc="BLAST chunks", unit="chunks"):
-        cmd = [
-            "blastn",
-            "-query",           str(chunk),
-            "-db",              str(db_prefix),
-            "-outfmt",          BLAST_OUTFMT,
-            "-max_target_seqs", str(max_target_seqs),
-            "-num_threads",     str(num_threads),
-        ]
-        try:
-            p = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-            )
-        except subprocess.CalledProcessError as e:
-            log(paths, f"blastn failed for {chunk}")
-            for stream_name, stream_content in [
-                ("blastn stdout", e.stdout), ("blastn stderr", e.stderr)
-            ]:
-                if stream_content:
-                    log(paths, f"--- {stream_name} ---")
-                    for line in stream_content.splitlines():
-                        log(paths, line)
-            raise
+        chunks = split_fasta_into_chunks(paths, query_fasta, scratch, chunk_size=100)
+        if out_file.exists():
+            out_file.unlink()
 
-        with open(out_file, "a", encoding="utf-8") as out:
-            if p.stdout:
-                out.write(p.stdout)
-        if p.stderr:
-            for line in p.stderr.splitlines():
-                log(paths, line)
+        log(paths, f"Running blastn chunked (threads={num_threads}, max_target_seqs={max_target_seqs})")
 
-    for p in paths.blast_tmp.glob("chunk_*.fasta"):
-        p.unlink(missing_ok=True)
+        for chunk in tqdm(chunks, desc="BLAST chunks", unit="chunks"):
+            _check_abort(abort_check)
+            cmd = [
+                "blastn",
+                "-query",           str(chunk),
+                "-db",              str(db_prefix),
+                "-outfmt",          BLAST_OUTFMT,
+                "-max_target_seqs", str(max_target_seqs),
+                "-num_threads",     str(num_threads),
+            ]
+            try:
+                p = subprocess.run(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+                    **winproc.no_window_kwargs(),
+                )
+            except subprocess.CalledProcessError as e:
+                log(paths, f"blastn failed for {chunk}")
+                for stream_name, stream_content in [
+                    ("blastn stdout", e.stdout), ("blastn stderr", e.stderr)
+                ]:
+                    if stream_content:
+                        log(paths, f"--- {stream_name} ---")
+                        for line in stream_content.splitlines():
+                            log(paths, line)
+                raise
+
+            with open(out_file, "a", encoding="utf-8") as out:
+                if p.stdout:
+                    out.write(p.stdout)
+            if p.stderr:
+                for line in p.stderr.splitlines():
+                    log(paths, line)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
     log(paths, f"BLAST finished. Output: {out_file}")
     return out_file
 
 
 def cleanup_blast_db(paths: ProjectPaths) -> None:
+    # Legacy cleanup for any runs created before this scratch-dir fix.
     for f in paths.blast_tmp.glob("DB.*"):
         f.unlink(missing_ok=True)
 
@@ -510,17 +648,17 @@ def cleanup_blast_db(paths: ProjectPaths) -> None:
 
 def extract_taxonomy(tax_str):
     if pd.isnull(tax_str):
-        return [None] * 8
+        return [None] * 9
     tax_parts = str(tax_str).replace("tax=", "").split(",")
     return [
         tax_parts[i].split(":")[1]
         if len(tax_parts) > i and ":" in tax_parts[i]
         else None
-        for i in range(8)
+        for i in range(9)
     ]
 
 
-def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int) -> Path:
+def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int, abort_check: AbortCheck = None,) -> Path:
     output_csv = paths.analysis_results / f"filtered_blast_results_{RUN_TS}.csv"
     if output_csv.exists():
         output_csv.unlink()
@@ -528,7 +666,7 @@ def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int) -
     column_order = [
         "qseqid", "s_acc",
         "s_phylum", "s_class", "s_order", "s_family", "s_genus", "s_species",
-        "gbif_tax", "ncbi_tax",
+        "col_tax", "gbif_tax", "ncbi_tax",
         "pident", "length", "mismatches", "gapopens",
         "qstart", "qend", "sstart", "send",
         "evalue", "bitscore", "qcov", "pident_interval",
@@ -576,6 +714,7 @@ def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int) -
         pd.read_csv(input_file, sep="\t", header=None, chunksize=chunksize),
         total=n_chunks, desc="Filtering BLAST chunks", dynamic_ncols=True, leave=True,
     ):
+        _check_abort(abort_check)
         chunk.columns = [
             "qseqid", "sseqid", "pident", "length", "mismatches", "gapopens",
             "qstart", "qend", "sstart", "send", "evalue", "bitscore", "qcov",
@@ -585,7 +724,7 @@ def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int) -
         )
         chunk[
             ["s_phylum", "s_class", "s_order", "s_family",
-             "s_genus", "s_species", "gbif_tax", "ncbi_tax"]
+             "s_genus", "s_species", "col_tax", "gbif_tax", "ncbi_tax"]
         ] = chunk["s_tax"].apply(extract_taxonomy).apply(pd.Series)
         chunk.drop(["sseqid", "s_tax"], axis=1, inplace=True)
         chunk["length"] = pd.to_numeric(chunk["length"], errors="coerce")
@@ -613,12 +752,29 @@ def filter_blast(paths: ProjectPaths, input_file: Path, length_threshold: int) -
     log(paths, f"Filtered BLAST CSV: {output_csv}")
     return output_csv
 
+def load_scoring_table(scoring_file: Path) -> pd.DataFrame:
+    """
+    Loads the scoring table, supporting both .csv (semicolon-delimited,
+    the historical format) and .xlsx (first sheet, plain columns).
+    """
+    suffix = scoring_file.suffix.lower()
+    if suffix == ".xlsx":
+        return pd.read_excel(scoring_file, sheet_name=0)
+    elif suffix == ".csv":
+        return pd.read_csv(scoring_file, sep=";")
+    else:
+        raise ValueError(
+            f"Unsupported scoring file format: '{suffix}'. "
+            "Expected .csv (semicolon-delimited) or .xlsx."
+        )
+
 
 def score_blast(
     paths: ProjectPaths,
     csv_file: Path,
     scoring_file: Optional[Path],
     score_type: str,
+    abort_check: AbortCheck = None,
 ) -> pd.DataFrame:
     tqdm.write("Scoring BLAST results...")
     tqdm.pandas()
@@ -630,7 +786,7 @@ def score_blast(
     def score_row(row):
         pident   = row["pident"]
         qcov     = row["qcov"]
-        score    = (pident / 2) + (qcov / 2)
+        score    = (pident) + (qcov / 5)
         taxonomy = {
             "s_phylum":  row["s_phylum"],
             "s_class":   row["s_class"],
@@ -638,16 +794,17 @@ def score_blast(
             "s_family":  row["s_family"],
             "s_genus":   row["s_genus"],
             "s_species": row["s_species"],
+            "col_tax":  row["col_tax"],
             "gbif_tax":  row["gbif_tax"],
             "ncbi_tax":  row["ncbi_tax"],
         }
         if pident > 97.0:
             pass
         elif pident > 94.0:
-            taxonomy["s_species"] = taxonomy["gbif_tax"] = taxonomy["ncbi_tax"] = UNKNOWN_TAXON
+            taxonomy["s_species"] = taxonomy["gbif_tax"] = taxonomy["ncbi_tax"] = taxonomy["col_tax"] = UNKNOWN_TAXON
         elif pident > 90.0:
             taxonomy["s_species"] = taxonomy["s_genus"] = UNKNOWN_TAXON
-            taxonomy["gbif_tax"]  = taxonomy["ncbi_tax"] = UNKNOWN_TAXON
+            taxonomy["gbif_tax"]  = taxonomy["ncbi_tax"] = taxonomy["col_tax"] = UNKNOWN_TAXON
         else:
             for k in taxonomy:
                 taxonomy[k] = UNKNOWN_TAXON
@@ -655,7 +812,7 @@ def score_blast(
 
     taxonomy_cols = [
         "s_phylum", "s_class", "s_order", "s_family",
-        "s_genus", "s_species", "gbif_tax", "ncbi_tax",
+        "s_genus", "s_species", "col_tax", "gbif_tax", "ncbi_tax",
     ]
     score_cols = ["blast_score"] + taxonomy_cols
 
@@ -664,7 +821,7 @@ def score_blast(
         merged_df = filtered_df
         merged_df["total_score"] = merged_df["blast_score"].fillna(0)
     else:
-        scoring_df = pd.read_csv(scoring_file, sep=";")
+        scoring_df = load_scoring_table(scoring_file)
         filtered_df[score_cols] = filtered_df.progress_apply(score_row, axis=1)
         merged_df = pd.merge(
             filtered_df, scoring_df,
@@ -693,6 +850,7 @@ def score_blast(
     for qseqid, group in tqdm(
         grouped, total=merged_df["qseqid"].nunique(), desc="Selecting best hits"
     ):
+        _check_abort(abort_check)
         group     = group.sort_values("total_score", ascending=False)
         max_score = group["total_score"].max()
         top_hits  = group[group["total_score"] == max_score]
@@ -745,7 +903,7 @@ def score_blast(
     keep_cols = [
         "qseqid", "s_acc",
         "s_phylum", "s_class", "s_order", "s_family", "s_genus", "s_species",
-        "gbif_tax", "ncbi_tax",
+        "col_tax", "gbif_tax", "ncbi_tax",
         "pident", "length", "mismatches", "gapopens",
         "qstart", "qend", "sstart", "send",
         "evalue", "bitscore", "qcov",
@@ -774,7 +932,7 @@ def results_file(paths: ProjectPaths, esv_xlsx: Path, scored: pd.DataFrame) -> P
 
     taxonomy_cols = [
         "s_acc", "s_phylum", "s_class", "s_order",
-        "s_family", "s_genus", "s_species", "gbif_tax", "ncbi_tax",
+        "s_family", "s_genus", "s_species", "col_tax", "gbif_tax", "ncbi_tax",
     ]
     reserved_cols = (
         ["hash", "sequence", "pident", "evalue", "total_score",
@@ -783,7 +941,9 @@ def results_file(paths: ProjectPaths, esv_xlsx: Path, scored: pd.DataFrame) -> P
     )
 
     sample_cols = [c for c in ESVs.columns if c not in reserved_cols and c in df.columns]
-    df["sum_of_reads"] = df[sample_cols].sum(axis=1)
+
+    sum_col = df[sample_cols].sum(axis=1).rename("sum_of_reads")
+    df = pd.concat([df, sum_col], axis=1).copy()
 
     results_order = (
         ["hash", "sequence"]
@@ -793,7 +953,8 @@ def results_file(paths: ProjectPaths, esv_xlsx: Path, scored: pd.DataFrame) -> P
         + sample_cols
     )
     df = df[[col for col in results_order if col in df.columns]]
-    df = df.replace(r"^\s*$", np.nan, regex=True).fillna("NA").infer_objects(copy=False)
+
+    df = df.replace(r"^\s*$", np.nan, regex=True).fillna("NA").infer_objects()
 
     for col in ["s_species", "other_candidates"]:
         if col in df.columns:
@@ -817,8 +978,10 @@ def step2_analysis(
     paths: ProjectPaths,
     analysis_settings: dict[str, Any],
     blast_out_default: Path,
+    abort_check: AbortCheck = None,
 ) -> Path:
     log(paths, "STEP 2: ANALYSIS")
+    _check_abort(abort_check)
 
     esv_table = resolve_path_setting(paths, analysis_settings["esv_table"], paths.input)
 
@@ -1120,10 +1283,10 @@ def match_taxon_to_gbif(
                         _MATCH_CACHE[cache_key] = out
                     return out
                 sleep_s = (2 ** attempt) + random.uniform(0, 1)
-                tqdm.write(
-                    f"  match '{name}' attempt {attempt + 1} "
-                    f"HTTP {r.status_code} — retrying in {sleep_s:.1f}s"
-                )
+#                tqdm.write(
+#                    f"  match '{name}' attempt {attempt + 1} "
+#                    f"HTTP {r.status_code} — retrying in {sleep_s:.1f}s"
+#                )
                 time.sleep(sleep_s)
                 continue
 
@@ -1177,6 +1340,7 @@ def match_taxonomy_with_gbif(
     safe_workers: int,
     gbif_user: Optional[str] = None,
     gbif_pwd: Optional[str] = None,
+    abort_check: AbortCheck = None,
 ) -> pd.DataFrame:
     """
     Match all taxa against the GBIF backbone using a thread pool.
@@ -1204,27 +1368,34 @@ def match_taxonomy_with_gbif(
 
     with ThreadPoolExecutor(max_workers=safe_workers) as ex:
         futures = [ex.submit(process_one, t) for t in taxa_to_process]
-        for fut in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Matching taxa",
-            unit="taxon",
-        ):
-            name, rank, tax, match = fut.result()
-            o = rows_by_name[name]
-            results.append({
-                "scientificName":    name,
-                "original_rank":     o.get("rank"),
-                "original_phylum":   o.get("phylum"),
-                "original_class":    o.get("class"),
-                "original_order":    o.get("order"),
-                "original_family":   o.get("family"),
-                "original_genus":    o.get("genus"),
-                **match,
-                "alternatives_json": json.dumps(
-                    match.get("alternatives", []), ensure_ascii=False
-                ),
-            })
+        try:
+            for fut in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Matching taxa",
+                unit="taxon",
+            ):
+                if abort_check is not None and abort_check():
+                    for f in futures:
+                        f.cancel()
+                    raise PipelineAborted("Pipeline aborted by user.")
+                name, rank, tax, match = fut.result()
+                o = rows_by_name[name]
+                results.append({
+                    "scientificName":    name,
+                    "original_rank":     o.get("rank"),
+                    "original_phylum":   o.get("phylum"),
+                    "original_class":    o.get("class"),
+                    "original_order":    o.get("order"),
+                    "original_family":   o.get("family"),
+                    "original_genus":    o.get("genus"),
+                    **match,
+                    "alternatives_json": json.dumps(
+                        match.get("alternatives", []), ensure_ascii=False
+                    ),
+                })
+        except PipelineAborted:
+            raise
 
     failed = [
         (r["scientificName"], r.get("original_rank"),
@@ -1259,6 +1430,23 @@ def match_taxonomy_with_gbif(
 # ---------------------------------------------------------------------------
 # GBIF occurrence — shared helpers
 # ---------------------------------------------------------------------------
+
+def build_gbif_year_param(raw_value: str) -> str:
+    """
+    Builds the GBIF occurrence/search `year` parameter from the user's
+    'year_from' setting, supporting the GBIF API's own range syntax:
+
+        "2010"        -> "2010,*"    (from 2010 to present — old behavior)
+        "2010,2020"   -> "2010,2020" (inclusive range, passed through)
+        "*,2020"      -> "*,2020"    (up to 2020)
+        "2010,*"      -> "2010,*"    (already explicit, passed through)
+    """
+    s = str(raw_value).strip()
+    if not s:
+        raise ValueError("year_from must not be empty")
+    if "," in s:
+        return s
+    return f"{s},*"
 
 def build_wkt_circle(lon: float, lat: float, radius_m: float, n_points: int = 60) -> str:
     geod     = Geod(ellps="WGS84")
@@ -1374,13 +1562,14 @@ def count_occurrences_api(
     paths: ProjectPaths,
     matches_df: pd.DataFrame,
     wkt_geometry: str,
-    year_from: int,
+    year_query: str,
     min_occurrences: int,
     safe_workers: int,
     gbif_user: Optional[str] = None,
     gbif_pwd: Optional[str] = None,
     rate_limiter: Optional[RateLimiter] = None,
     cache_path: Optional[Path] = None,
+    abort_check: AbortCheck = None,
 ) -> pd.DataFrame:
     """
     Count GBIF occurrences using the occurrence/search endpoint.
@@ -1423,7 +1612,7 @@ def count_occurrences_api(
     def make_cache_key(taxon_key: int) -> str:
         return (
             f"taxonKey={int(taxon_key)}|"
-            f"year_from={int(year_from)}|"
+            f"year_query={year_query}|"
             f"geometry={geometry_hash}|"
             f"min_occurrences={int(min_occurrences)}"
         )
@@ -1479,7 +1668,7 @@ def count_occurrences_api(
         params = {
             "taxonKey": str(taxon_key),
             "geometry": wkt_geometry,
-            "year": f"{int(year_from)},*",
+            "year": year_query,
             "occurrenceStatus": "PRESENT",
             "hasGeospatialIssue": "false",
             "hasCoordinate": "true",
@@ -1523,10 +1712,10 @@ def count_occurrences_api(
                         else (2 ** attempt) + random.uniform(1, 3)
                     )
 
-                    tqdm.write(
-                        f"  key {taxon_key} attempt {attempt + 1} "
-                        f"HTTP {r.status_code} — sleeping {sleep_s:.1f}s"
-                    )
+#                    tqdm.write(
+#                        f"  key {taxon_key} attempt {attempt + 1} "
+#                        f"HTTP {r.status_code} — sleeping {sleep_s:.1f}s"
+#                    )
                     time.sleep(sleep_s)
 
                 else:
@@ -1568,6 +1757,12 @@ def count_occurrences_api(
                 desc=desc,
                 unit="taxon",
             ):
+                if abort_check is not None and abort_check():
+                    for f in futures:
+                        f.cancel()
+                    save_cache_if_enabled()
+                    raise PipelineAborted("Pipeline aborted by user.")
+
                 k, res = fut.result()
 
                 with result_lock:
@@ -1738,13 +1933,16 @@ def compare_to_input_and_write(
         f"family: {len(idx_family)}"
     ))
 
-    inp["GBIF_presence_species"] = _label_series(inp["s_species"], idx_species)
-    inp["GBIF_presence_genus"]   = _label_series(inp["s_genus"],   idx_genus)
-    inp["GBIF_presence_family"]  = _label_series(inp["s_family"],  idx_family)
+    new_cols = pd.DataFrame({
+        "GBIF_presence_species": _label_series(inp["s_species"], idx_species),
+        "GBIF_presence_genus":   _label_series(inp["s_genus"],   idx_genus),
+        "GBIF_presence_family":  _label_series(inp["s_family"],  idx_family),
+        "remaining_other_candidates": inp["other_candidates"].map(
+            lambda cell: filter_other_candidates_cell(idx_species, cell)
+        ),
+    }, index=inp.index)
 
-    inp["remaining_other_candidates"] = inp["other_candidates"].map(
-        lambda cell: filter_other_candidates_cell(idx_species, cell)
-    )
+    inp = pd.concat([inp, new_cols], axis=1).copy()
     inp = inp.drop(columns=["other_candidates"])
 
     insert_cols = [
@@ -1788,6 +1986,7 @@ def step3_gbif(
     paths: ProjectPaths,
     gbif_settings: dict[str, Any],
     analysis_results_default: Optional[Path],
+    abort_check: AbortCheck = None,
 ) -> None:
     """
     Orchestrate Step 3 — always uses the GBIF occurrence/search API.
@@ -1798,6 +1997,7 @@ def step3_gbif(
           plus more lenient rate limits from the GBIF API.
     """
     log(paths, "STEP 3: GBIF OCCURRENCE")
+    _check_abort(abort_check)
 
     inp_override = gbif_settings.get("input_results_xlsx")
     input_xlsx = (
@@ -1810,7 +2010,9 @@ def step3_gbif(
     if not input_xlsx.exists():
         raise FileNotFoundError(f"GBIF input results file not found: {input_xlsx}")
 
-    year_from = get_int(gbif_settings,   "year_from")
+    year_from_raw = get_str(gbif_settings, "year_from")
+    year_query    = build_gbif_year_param(year_from_raw)
+    log(paths, f"GBIF year filter: year={year_query}")
     lon       = get_float(gbif_settings, "lon")
     lat       = get_float(gbif_settings, "lat")
     radius_m  = get_float(gbif_settings, "radius_m")
@@ -1861,6 +2063,7 @@ def step3_gbif(
         safe_workers=safe_workers,
         gbif_user=gbif_user,
         gbif_pwd=gbif_pwd,
+        abort_check=abort_check,
     )
 
     # Step 3c: build WKT geometry
@@ -1881,13 +2084,14 @@ def step3_gbif(
         paths,
         matches_df,
         wkt_geometry=wkt,
-        year_from=year_from,
+        year_query=year_query,
         min_occurrences=min_occ,
         safe_workers=safe_workers,
         gbif_user=gbif_user,
         gbif_pwd=gbif_pwd,
         rate_limiter=rate_limiter,
         cache_path=occ_cache_path,
+        abort_check=abort_check,
     )
 
     compare_path = Path(str(base) + "_results_with_gbif_presence.xlsx")
@@ -1912,7 +2116,7 @@ def cmd_init(project_name: str, force: bool) -> None:
     log(paths, f"Run: python3 pipeline.py run --project {project_name} --steps all")
 
 
-def cmd_run(project_name: str, steps: str) -> None:
+def cmd_run(project_name: str, steps: str, abort_check: AbortCheck = None) -> None:
     root  = Path(project_name).resolve()
     paths = ProjectPaths(root)
     ensure_structure(paths)
@@ -1942,23 +2146,34 @@ def cmd_run(project_name: str, steps: str) -> None:
     blast_out:    Optional[Path] = None
     results_xlsx: Optional[Path] = None
 
-    if "blast" in want:
-        blast_out = step1_blast(paths, blast_settings)
+    try:
+        if "blast" in want:
+            blast_out = step1_blast(paths, blast_settings, abort_check=abort_check)
 
-    if "analysis" in want:
-        if blast_out is None:
-            candidates = sorted(
-                paths.blast_results.glob("blast_*.out"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            blast_out = candidates[0] if candidates else (
-                paths.blast_results / f"blast_{RUN_TS}.out"
-            )
-        results_xlsx = step2_analysis(paths, analysis_settings, blast_out_default=blast_out)
+        _check_abort(abort_check)
 
-    if "gbif" in want:
-        step3_gbif(paths, gbif_settings, analysis_results_default=results_xlsx)
+        if "analysis" in want:
+            if blast_out is None:
+                candidates = sorted(
+                    paths.blast_results.glob("blast_*.out"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                blast_out = candidates[0] if candidates else (
+                    paths.blast_results / f"blast_{RUN_TS}.out"
+                )
+            results_xlsx = step2_analysis(
+                paths, analysis_settings, blast_out_default=blast_out, abort_check=abort_check
+            )
+
+        _check_abort(abort_check)
+
+        if "gbif" in want:
+            step3_gbif(paths, gbif_settings, analysis_results_default=results_xlsx, abort_check=abort_check)
+
+    except PipelineAborted:
+        log(paths, "PIPELINE ABORTED BY USER.")
+        raise
 
     cleanup_blast_db(paths)
     log(paths, "PIPELINE FINISHED.")
