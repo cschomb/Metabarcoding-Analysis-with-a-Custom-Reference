@@ -21,13 +21,51 @@ The script will apply information thresholds according to the percent identity b
  94-90%  - taxonomic information about genus and species is deleted
   < 90%  - no taxonomic information is kept
 ```
-
-
+#### Optional scoring file
+If there is additional information on the quality and reliability and / or the local occurrence of species in the reference sequences (as outlined in the example [here](https://github.com/cschomb/Primer-specific-Reference-Databases-for-Metabarcoding)). This information can also be incorporated into the analysis, in order to prefer more reliable and local references.
 
 
 ### GBIF occurrence search
+The script also provides the possibility to perform a plausibility check against occurrences in GBIF. Taxa from the analysis can be compared against GBIF in an area and time period, which can be set and a threshold for the number of occurrences within the search parameters. The species, genera and families are then assigned either 'plausible' or 'implausible' status, depending on the outcome of the GBIF search.
 
-## Requirements
+
+## Dependencies and requirements
+
+This script requires `Python v3.9x` and `ncbi-blast+ v2.12`
+
+Further Python dependencies are:
+`
+numpy
+pandas
+requests
+openpyxl
+pyproj
+tqdm
+urllib3
+streamlit>=1.37 (for the GUI version)
+folium (for the GUI version)
+streamlit-folium (for the GUI version)
+`
+### Reference FASTA
+The reference FASTA is used to BLAST the ESVs against it. In order to apply the information thresholds during the analysis (as described above), the FASTA headers need to be structured similar to the SINTAX format:
+>[!IMPORTANT]
+>```[Accession number];tax=p:[PHYLUM],c:[CLASS],o:[ORDER],f:[FAMILY],g:[GENUS],s:[SPECIES],gbiftax:[GBIF TAXONOMY],ncbitax:[NCBI TAXONOMY]```
+>
+>Example:
+>
+>```OR234967.1;tax=p:Tracheophyta,c:Magnoliopsida,o:Boraginales,f:Boraginaceae,g:Borago,s:Borago_officinalis,gbiftax:2926110,ncbitax:13363```
+
+### ESV FASTA
+
+### ESV table
+
+### Scoring file
+
+
+
+
+
+
 This script needs the output from a Apscale run (v4 or higher), and a reference FASTA file with structured headers, similar to the SINTAX format.
 
 >[!IMPORTANT]
@@ -40,24 +78,6 @@ This script needs the output from a Apscale run (v4 or higher), and a reference 
 
 The taxonomy IDs for GBIF and NCBI are optional and can help to resolve taxonomic issues when querying sequences that come from NCBI originally against the GBIF taxonomy backbone. When left out, this will result in the corresponding columns to be empty in the results files. Prepepared reference fasta file can be found [here](https://github.com/cschomb/Primer-specific-Reference-Databases-for-Metabarcoding).
 
-### Optional scoring file
-The Primer specific reference databases also come with a scoring file, which reflect the quality of the reference sequences and the possibility to use them as a country-specific local database. Sequences score points according how well they can be distinguished from similar sequences and are optionally awarded points for local occurrence.
-
-
-
-### Dependencies
-This script was written for a UNIX Command Line Interface and requires `Python v3.12` and `ncbi-blast+ v2.12`
-
-Further Python dependencies are:
-`
-numpy
-pandas
-requests
-openpyxl
-pyproj
-tqdm
-urllib3
-`
 
 
 
